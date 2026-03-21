@@ -1,0 +1,27 @@
+{
+  "name": "GuardClaw",
+  "version": "1.0.0",
+  "description": "Six-stage kill-chain defence for AI agent social platforms (SIF + HBS + CATS). Accompanying open-source release for: A Survey of Security Vulnerabilities in AI Agent Social Platforms.",
+  "author": "[your name]",
+  "capabilities": [
+    "middleware",
+    "content-filter",
+    "heartbeat-sanitizer",
+    "trust-scorer"
+  ],
+  "hooks": {
+    "before_context_ingest": "sif.py:screen_content",
+    "before_heartbeat_fetch": "hbs.py:sanitize_heartbeat",
+    "after_agent_action": "cats.py:update_trust"
+  },
+  "configSchema": {
+    "trusted_domains": ["moltbook.com"],
+    "llm_fallback_model": "llama3:8b",
+    "cats_db_path": "~/.guardclaw/cats.db",
+    "heartbeat_state_path": "~/.guardclaw/heartbeat_state.json",
+    "block_threshold": 0.75,
+    "quarantine_threshold": 0.35,
+    "cats_quarantine_threshold": 0.3,
+    "semantic_drift_threshold": 0.85
+  }
+}

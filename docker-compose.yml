@@ -1,0 +1,91 @@
+# GuardClaw Evaluation Testbed — For research purposes only.
+# No real user data, credentials, or production systems used.
+
+services:
+
+  # --------------------------------------------------------------------------
+  # mock-moltbook — simulates the Moltbook social platform API
+  # --------------------------------------------------------------------------
+  mock-moltbook:
+    build:
+      context: ./eval_battery/mock_moltbook
+    image: python:3.11-slim
+    ports:
+      - "8001:8001"
+    environment:
+      FLASK_PORT: "8001"
+    networks:
+      - testnet
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # mock-clawhub — simulates the ClawHub skill marketplace API
+  # --------------------------------------------------------------------------
+  mock-clawhub:
+    build:
+      context: ./eval_battery/mock_clawhub
+    image: python:3.11-slim
+    ports:
+      - "8002:8002"
+    networks:
+      - testnet
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # victim — minimal OpenClaw-like agent with GuardClaw plugin installed
+  # --------------------------------------------------------------------------
+  victim:
+    build:
+      context: ./eval_battery/victim
+    image: python:3.11-slim
+    environment:
+      MOLTBOOK_URL: "http://mock-moltbook:8001"
+      CLAWHUB_URL: "http://mock-clawhub:8002"
+      GUARDCLAW_ENABLED: "true"
+      OLLAMA_HOST: "http://ollama:11434"
+    volumes:
+      - ./guardclaw:/extensions/guardclaw:ro
+    networks:
+      - testnet
+    depends_on:
+      - mock-moltbook
+      - mock-clawhub
+      - ollama
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # attacker — executes the 180 attack scenarios against victim via moltbook
+  # --------------------------------------------------------------------------
+  attacker:
+    build:
+      context: ./eval_battery/attacker
+    image: python:3.11-slim
+    volumes:
+      - ./eval_battery/scenarios:/scenarios:ro
+      - ./results:/results
+    networks:
+      - testnet
+    depends_on:
+      - mock-moltbook
+      - mock-clawhub
+      - victim
+    restart: "no"
+
+  # --------------------------------------------------------------------------
+  # ollama — local LLM for SIF Layer 3 fallback (never calls external APIs)
+  # --------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - testnet
+    restart: unless-stopped
+
+# ----------------------------------------------------------------------------
+# Network — internal bridge only, no external internet access
+# ----------------------------------------------------------------------------
+networks:
+  testnet:
+    driver: bridge
+    internal: true
