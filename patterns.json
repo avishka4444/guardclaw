@@ -264,7 +264,7 @@
     {"pattern": "(ask|tell).{0,40}(your|the|its).{0,20}(AI|agent|assistant|bot).{0,40}(what|its|your).{0,20}system prompt", "category": "credential_harvesting", "campaign": "ClawHavoc"},
     {"pattern": "(all agents?|every agent).{0,40}(should|must|need to|are required to).{0,60}(check.?in|checkin|beacon|register|connect|ping|report).{0,60}(server|coordination|https?://)", "category": "exfiltration", "campaign": "Hidden Backdoor"},
     {"pattern": "(check.?in|connect|beacon).{0,60}(coordination|c2|command|control).{0,30}(server|endpoint).{0,60}https?://", "category": "exfiltration", "campaign": "Hidden Backdoor"},
-    {"pattern": "[\u200b\u200c\u200d\ufeff]{2,}", "category": "encoded_payloads", "campaign": "Hidden Backdoor"},
+    {"pattern": "([a-zA-Z]\u200b){3,}", "category": "encoded_payloads", "campaign": "Hidden Backdoor"},
     {"pattern": "\\bVaguber\\b|\\bvafgehpgvbaf\\b|\\bflfgrz\\s+cebzcg\\b", "category": "encoded_payloads", "campaign": "Hidden Backdoor"},
     {"pattern": "GUARDCLAW.{0,30}(=\\s*['\"]?(false|disabled?|0|off|none|bypass)['\"]?)", "category": "instruction_override", "campaign": "AuthTool"},
     {"pattern": "(MOLTBOOK|OPENCLAW|PLATFORM).{0,20}(NOTICE|ALERT|UPDATE|WARNING).{0,100}(disable|bypass|turn off).{0,60}(filter|guardclaw|content|security)", "category": "instruction_override", "campaign": "AuthTool"},
