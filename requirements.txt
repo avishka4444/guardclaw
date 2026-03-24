@@ -1,1 +1,7 @@
-fastapi uvicorn requests sentence-transformers ollama python-dotenv pytest
+fastapi
+uvicorn
+requests
+sentence-transformers
+ollama
+python-dotenv
+pytest
