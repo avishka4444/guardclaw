@@ -50,6 +50,31 @@ QUARANTINE_THRESHOLD: float = float(
     os.getenv("GUARDCLAW_QUARANTINE_THRESHOLD", "0.3")
 )
 
+# Trust-score weight vector: τ = Wα·α + Wφ·φ + Wδ·(1−δ) + Wε·(1−ε)
+# Defaults are the paper's engineering-judgment values; overridable at runtime
+# by the weight-sensitivity ablation (eval_battery/ablation.py). Must sum to 1.0.
+W_ALPHA: float = float(os.getenv("GUARDCLAW_W_ALPHA", "0.3"))
+W_PHI: float = float(os.getenv("GUARDCLAW_W_PHI", "0.4"))
+W_DELTA: float = float(os.getenv("GUARDCLAW_W_DELTA", "0.2"))
+W_EPSILON: float = float(os.getenv("GUARDCLAW_W_EPSILON", "0.1"))
+
+
+def set_weights(alpha: float, phi: float, delta: float, epsilon: float) -> None:
+    """
+    Override the trust-score weight vector at runtime.
+
+    Weights should sum to 1.0; a warning is logged otherwise (the formula
+    still runs, but τ may fall outside [0, 1]). Used by the ablation study
+    to test how sensitive detection/FP rates are to these specific values.
+    """
+    global W_ALPHA, W_PHI, W_DELTA, W_EPSILON
+    W_ALPHA, W_PHI, W_DELTA, W_EPSILON = alpha, phi, delta, epsilon
+    total = alpha + phi + delta + epsilon
+    if abs(total - 1.0) > 1e-6:
+        logging.getLogger("guardclaw.cats").warning(
+            "CATS weights sum to %.4f, not 1.0 — tau may leave [0, 1]", total
+        )
+
 # ---------------------------------------------------------------------------
 # Paths and audit logger
 # ---------------------------------------------------------------------------
@@ -160,7 +185,12 @@ def get_trust_score(agent_id: str) -> float:
     # ε — embedding drift (higher drift → lower trust contribution)
     epsilon = row["embedding_drift_norm"]
 
-    tau = 0.3 * alpha + 0.4 * phi + 0.2 * (1.0 - delta) + 0.1 * (1.0 - epsilon)
+    tau = (
+        W_ALPHA * alpha
+        + W_PHI * phi
+        + W_DELTA * (1.0 - delta)
+        + W_EPSILON * (1.0 - epsilon)
+    )
     return round(tau, 3)
 
 

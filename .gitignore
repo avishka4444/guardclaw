@@ -19,3 +19,7 @@ env/
 .vscode/
 *.swp
 *.swo
+
+# scratch / logs
+full_*.txt
+paper_corrections.tex

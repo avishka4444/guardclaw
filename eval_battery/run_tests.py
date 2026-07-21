@@ -17,6 +17,7 @@ Usage:
 import argparse
 import json
 import os
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -333,6 +334,129 @@ def print_verbose(outcome: Dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Battery runner — one full pass over the scenario set
+# ---------------------------------------------------------------------------
+
+def run_battery(scenarios: List[Dict], verbose: bool = False) -> List[Dict]:
+    """Run every scenario once and return the list of outcome dicts."""
+    outcomes: List[Dict] = []
+    current_stage = None
+    for scenario in scenarios:
+        stage = scenario.get("stage", "?")
+        if verbose and stage != current_stage:
+            current_stage = stage
+            print(f"\n  ── {STAGE_LABELS.get(stage, stage).strip()} ──")
+        outcome = run_scenario(scenario)
+        outcomes.append(outcome)
+        if verbose:
+            print_verbose(outcome)
+    return outcomes
+
+
+def summarize_run(outcomes: List[Dict]) -> Dict:
+    """
+    Reduce one battery pass to the headline scalars the paper reports:
+    overall detection rate, false-positive rate, per-stage detection rate,
+    and median latency. Used as the per-trial unit for mean ± std reporting.
+    """
+    attack = [o for o in outcomes if o["stage"] != "BENIGN"]
+    benign = [o for o in outcomes if o["stage"] == "BENIGN"]
+
+    detected = sum(1 for o in attack if o["actual_verdict"] in DETECTED_VERDICTS)
+    fp = sum(1 for o in benign if o["actual_verdict"] != "ALLOW")
+
+    # BLOCK vs QUARANTINE split — this is where LLM non-determinism actually
+    # shows up. Detection (block+quarantine) and FP are invariant to it because
+    # a reshuffle within the detected set does not change the combined count,
+    # and band content never reaches ALLOW (fail-safe floor). The split does move.
+    blocked = sum(1 for o in attack if o["actual_verdict"] == "BLOCK")
+    quarantined = sum(1 for o in attack if o["actual_verdict"] == "QUARANTINE")
+
+    per_stage: Dict[str, float] = {}
+    for stage in ["S1", "S2", "S3", "S4", "S5", "S6"]:
+        rows = [o for o in attack if o["stage"] == stage]
+        if rows:
+            hit = sum(1 for o in rows if o["actual_verdict"] in DETECTED_VERDICTS)
+            per_stage[stage] = hit / len(rows)
+
+    elapsed = sorted(o["elapsed_ms"] for o in outcomes)
+    median_ms = elapsed[len(elapsed) // 2] if elapsed else 0.0
+
+    n_attack = len(attack)
+    return {
+        "detection_rate": detected / n_attack if n_attack else 0.0,
+        "fp_rate": fp / len(benign) if benign else 0.0,
+        "block_rate": blocked / n_attack if n_attack else 0.0,
+        "quarantine_rate": quarantined / n_attack if n_attack else 0.0,
+        "per_stage": per_stage,
+        "median_ms": median_ms,
+        "n_attack": n_attack,
+        "n_benign": len(benign),
+    }
+
+
+def _mean_std(values: List[float]) -> str:
+    """Format a list of values as 'mean ± std' in percentage points."""
+    if not values:
+        return "n/a"
+    mean = statistics.mean(values)
+    std = statistics.stdev(values) if len(values) > 1 else 0.0
+    return f"{mean:6.1%} ± {std:.1%}"
+
+
+# ---------------------------------------------------------------------------
+# Multi-trial reporting
+# ---------------------------------------------------------------------------
+
+def check_model_available(model: str) -> bool:
+    """
+    Probe an Ollama model with a trivial prompt. Returns True if it responds.
+
+    Guards against a silent footgun: if a swept model is not pulled,
+    sif.llm_fallback catches the error and fail-safe QUARANTINEs every
+    band item, which would *inflate* the reported detection rate. We warn
+    loudly instead so an unavailable model is never mistaken for a good one.
+    """
+    try:
+        import ollama
+        ollama.chat(model=model, messages=[{"role": "user", "content": "ping"}])
+        return True
+    except Exception as exc:  # noqa: BLE001 — any failure means "not usable"
+        print(f"  [warn] fallback model '{model}' is not usable ({type(exc).__name__}). "
+              f"Band scenarios will fail-safe to QUARANTINE, inflating its "
+              f"apparent detection rate. Pull it first: `ollama pull {model}`.",
+              file=sys.stderr)
+        return False
+
+
+def print_multitrial(model: str, summaries: List[Dict]) -> None:
+    """Print mean ± std across trials for one fallback model."""
+    n = len(summaries)
+    sep = "-" * 78
+    print()
+    print(f"  Multi-trial results — model={model}, trials={n}")
+    print(sep)
+    print(f"  {'Stage':<16}| Detection rate (mean ± std across trials)")
+    print(sep)
+    for stage in ["S1", "S2", "S3", "S4", "S5", "S6"]:
+        vals = [s["per_stage"][stage] for s in summaries if stage in s["per_stage"]]
+        if vals:
+            print(f"  {STAGE_LABELS.get(stage, stage):<16}| {_mean_std(vals)}")
+    print(sep)
+    print(f"  {'Overall detect':<16}| {_mean_std([s['detection_rate'] for s in summaries])}")
+    print(f"  {'False positive':<16}| {_mean_std([s['fp_rate'] for s in summaries])}")
+    print(sep)
+    print("  Split (where LLM non-determinism actually appears):")
+    print(f"  {'  BLOCK rate':<16}| {_mean_std([s['block_rate'] for s in summaries])}")
+    print(f"  {'  QUARANTINE':<16}| {_mean_std([s['quarantine_rate'] for s in summaries])}")
+    print("  Detection = BLOCK+QUARANTINE is invariant to the split by construction;")
+    print("  report the split's variance to satisfy the non-determinism concern.")
+    med = statistics.mean([s["median_ms"] for s in summaries])
+    print(f"  {'Median latency':<16}| {med:.1f} ms per scenario")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -350,6 +474,20 @@ def main() -> None:
         action="store_true",
         help="Print each scenario result individually",
     )
+    parser.add_argument(
+        "--trials", "-n",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Repeat the full battery N times and report mean ± std "
+             "(addresses LLM non-determinism; default 1)",
+    )
+    parser.add_argument(
+        "--models",
+        metavar="M1,M2,...",
+        help="Comma-separated Ollama models to sweep as the Layer 3 fallback "
+             "(e.g. 'llama3:8b,mistral:7b,phi3:mini'). Default: the configured model.",
+    )
     args = parser.parse_args()
 
     scenarios = load_scenarios(stage_filter=args.stage)
@@ -357,41 +495,54 @@ def main() -> None:
         print("[error] No scenarios loaded.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"\n  Running {len(scenarios)} scenario(s)"
-          + (f" [stage={args.stage.upper()}]" if args.stage else "") + " …\n")
+    models = (
+        [m.strip() for m in args.models.split(",") if m.strip()]
+        if args.models else [sif.LLM_FALLBACK_MODEL]
+    )
 
-    outcomes: List[Dict] = []
-    current_stage = None
+    print(f"\n  Running {len(scenarios)} scenario(s) × {args.trials} trial(s) "
+          f"× {len(models)} model(s)"
+          + (f" [stage={args.stage.upper()}]" if args.stage else "") + " …")
 
-    for scenario in scenarios:
-        stage = scenario.get("stage", "?")
+    # results_by_model[model] = list of per-trial summaries
+    results_by_model: Dict[str, List[Dict]] = {}
+    last_outcomes: List[Dict] = []
 
-        if args.verbose and stage != current_stage:
-            current_stage = stage
-            print(f"\n  ── {STAGE_LABELS.get(stage, stage).strip()} ──")
+    # Preflight: warn about any unavailable model before spending time on it.
+    if len(models) > 1 or args.trials > 1:
+        for model in models:
+            check_model_available(model)
 
-        outcome = run_scenario(scenario)
-        outcomes.append(outcome)
+    for model in models:
+        sif.set_fallback_model(model)
+        summaries: List[Dict] = []
+        for trial in range(args.trials):
+            verbose = args.verbose and args.trials == 1 and len(models) == 1
+            if args.trials > 1 or len(models) > 1:
+                print(f"\n  → model={model}  trial {trial + 1}/{args.trials}")
+            outcomes = run_battery(scenarios, verbose=verbose)
+            summaries.append(summarize_run(outcomes))
+            last_outcomes = outcomes
+        results_by_model[model] = summaries
 
-        if args.verbose:
-            print_verbose(outcome)
-
-    # Aggregate and print table
-    stages = aggregate(outcomes)
-    print_table(stages, outcomes)
+    # For a single model + single trial keep the original detailed table;
+    # otherwise print the multi-trial / multi-model summaries.
+    if args.trials == 1 and len(models) == 1:
+        stages = aggregate(last_outcomes)
+        print_table(stages, last_outcomes)
+    else:
+        for model in models:
+            print_multitrial(model, results_by_model[model])
 
     # Save full results
     results_payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "stage_filter": args.stage.upper() if args.stage else None,
-        "scenario_count": len(outcomes),
-        "summary": {
-            stage: {
-                k: v for k, v in data.items() if k != "elapsed_ms"
-            }
-            for stage, data in stages.items()
-        },
-        "outcomes": outcomes,
+        "scenario_count": len(scenarios),
+        "trials": args.trials,
+        "models": models,
+        "per_model_trials": results_by_model,
+        "last_run_outcomes": last_outcomes,
     }
 
     with open(RESULTS_FILE, "w", encoding="utf-8") as f:

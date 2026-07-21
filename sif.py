@@ -32,6 +32,33 @@ BLOCK_THRESHOLD = float(os.getenv("GUARDCLAW_BLOCK_THRESHOLD", "0.75"))
 QUARANTINE_THRESHOLD = float(os.getenv("GUARDCLAW_QUARANTINE_THRESHOLD", "0.25"))
 LLM_FALLBACK_MODEL = os.getenv("GUARDCLAW_LLM_MODEL", "llama3:8b")
 
+
+def set_thresholds(block: float = None, quarantine: float = None) -> None:
+    """
+    Override the SIF decision thresholds at runtime.
+
+    Used by the threshold-sensitivity ablation (eval_battery/ablation.py) to
+    sweep values without restarting the process. Passing None leaves a
+    threshold unchanged.
+    """
+    global BLOCK_THRESHOLD, QUARANTINE_THRESHOLD
+    if block is not None:
+        BLOCK_THRESHOLD = float(block)
+    if quarantine is not None:
+        QUARANTINE_THRESHOLD = float(quarantine)
+
+
+def set_fallback_model(model: str) -> None:
+    """
+    Override the Ollama model used by the Layer 3 LLM fallback at runtime.
+
+    Used by the multi-model sweep (eval_battery/run_tests.py --models ...) to
+    test whether a payload that bypasses one fallback model also bypasses a
+    different one — the paper argues it should not be assumed to.
+    """
+    global LLM_FALLBACK_MODEL
+    LLM_FALLBACK_MODEL = model
+
 # ---------------------------------------------------------------------------
 # Audit log — appends JSONL to ~/.guardclaw/sif_audit.jsonl
 # ---------------------------------------------------------------------------

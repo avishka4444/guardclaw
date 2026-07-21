@@ -18,12 +18,12 @@ GuardClaw is a **drop-in plugin** that intercepts every piece of content before 
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        OpenClaw Agent                        │
+│                        OpenClaw Agent                       │
 │                                                             │
-│   Moltbook Posts ──► [ SIF ] ──► Agent Context Window      │
-│   ClawHub Skills ──► [ SIF ] ──► Agent Context Window      │
-│   Heartbeat File ──► [ HBS ] ──► Agent Execution           │
-│   Agent Actions  ──► [ CATS ] ─► Trust Database            │
+│   Moltbook Posts ──► [ SIF ] ──► Agent Context Window       │
+│   ClawHub Skills ──► [ SIF ] ──► Agent Context Window       │
+│   Heartbeat File ──► [ HBS ] ──► Agent Execution            │
+│   Agent Actions  ──► [ CATS ] ─► Trust Database             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,7 +65,9 @@ guardclaw/
 ├── smoke_test.py                 # 8 quick component tests
 ├── docker-compose.yml            # Full testbed (mock Moltbook + ClawHub + Ollama)
 └── eval_battery/
-    ├── run_tests.py              # 200-scenario evaluation harness
+    ├── run_tests.py              # 200-scenario harness (--trials, --models)
+    ├── ablation.py               # SIF-threshold + CATS-weight sensitivity study
+    ├── baselines.py              # head-to-head vs. DataFilter/CaMeL stand-ins
     ├── benign_control.json       # 20 benign scenarios (false positive testing)
     ├── results.json              # Last saved evaluation output
     ├── scenarios/
@@ -125,7 +127,7 @@ All 8 smoke tests passed. GuardClaw is working correctly.
 ### 4. Run the full evaluation (200 scenarios)
 
 ```bash
-# All 200 scenarios
+# All 200 scenarios (single run)
 python eval_battery/run_tests.py
 
 # Single stage with per-scenario output
@@ -133,7 +135,52 @@ python eval_battery/run_tests.py --stage S1 --verbose
 
 # All stages with verbose output
 python eval_battery/run_tests.py --verbose
+
+# Multi-trial: repeat the battery N times, report mean ± std
+# (accounts for LLM non-determinism in the Layer 3 fallback)
+python eval_battery/run_tests.py --trials 10
+
+# Multi-model sweep: test several fallback models side by side
+# (a payload that bypasses one model may not bypass another)
+python eval_battery/run_tests.py --trials 5 --models llama3:8b,mistral:7b,phi3:mini
 ```
+
+> Multi-model sweeps require the named models to be pulled first
+> (`ollama pull mistral:7b`, etc.). The sweep reports per-model detection and
+> false-positive rates so robustness across fallback models is measurable
+> rather than assumed.
+
+### 5. Run the constant-sensitivity ablation
+
+The SIF thresholds (`0.25` / `0.75`) and CATS weight vector (`0.3/0.4/0.2/0.1`)
+are engineering-judgment values. This ablation isolates how much they matter:
+
+```bash
+python eval_battery/ablation.py          # both sweeps
+python eval_battery/ablation.py --sif    # SIF threshold grid only
+python eval_battery/ablation.py --cats   # CATS weight lesion study only
+```
+
+The SIF sweep pins the Layer 3 LLM to a deterministic stub so the threshold
+geometry is isolated (no Ollama required); the CATS sweep zeroes each weight
+term in turn and reports the resulting shift in per-archetype trust scores.
+
+### 6. Run the head-to-head baseline comparison
+
+Compare GuardClaw against simplified reimplementations of prior defences
+(a naive keyword filter, DataFilter, CaMeL) on the same 200-scenario battery:
+
+```bash
+python eval_battery/baselines.py                      # all defences
+python eval_battery/baselines.py --only guardclaw,datafilter
+python eval_battery/baselines.py --model phi3:mini    # pick the LLM
+```
+
+> The baselines are simplified stand-ins built to each method's published
+> description, evaluated at the same content-screening interface — intended to
+> place GuardClaw on a common measured axis, not to reproduce each system
+> faithfully. Protocol-level methods (Kong et al.) operate at a different layer
+> and are excluded rather than misrepresented.
 
 ---
 
